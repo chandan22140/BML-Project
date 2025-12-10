@@ -1,0 +1,44 @@
+# Experiment Configuration Template
+# Copy this file and modify for different experiment runs
+
+# Model Configuration
+model:
+  name: "google/vit-base-patch16-224"
+  num_classes: 100
+
+# LoRA Configuration
+lora:
+  r: 16                    # Rank
+  alpha: 16                # Scaling factor
+  dropout: 0.1             # Dropout probability
+  target_modules:
+    - "query"
+    - "value"
+
+# Training Configuration
+training:
+  epochs: 20
+  batch_size: 128
+  learning_rate: 0.001
+  weight_decay: 0.0
+  prior_precision: 1.0     # Lambda for L2 regularization
+  seed: 42
+
+# Evaluation Configuration
+evaluation:
+  num_samples: 30          # Number of posterior samples
+  n_bins: 15               # Number of bins for ECE
+  laplace_type: "diagonal" # "diagonal" or "kfac"
+  batch_size: 128
+
+# Data Configuration
+data:
+  dataset: "cifar100"
+  image_size: 224
+  num_workers: 4
+
+# Output Configuration
+output:
+  checkpoint_dir: "checkpoints/vit_lora_cifar100"
+  results_dir: "results"
+  save_every: 5            # Save checkpoint every N epochs
