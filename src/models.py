@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from transformers import ViTForImageClassification, ViTConfig
 from peft import LoraConfig, get_peft_model
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 
 def create_vit_lora(
@@ -122,3 +122,40 @@ def unfreeze_all_lora(model: nn.Module):
     for name, param in model.named_parameters():
         if 'lora' in name.lower():
             param.requires_grad = True
+
+
+def get_lora_modules(model: nn.Module) -> Dict[str, nn.Module]:
+    """
+    Get all LoRA modules from a PEFT model.
+    
+    This function finds the parent modules that contain lora_A and lora_B,
+    which is useful for KFAC Laplace approximation.
+    
+    Args:
+        model: PEFT model with LoRA
+    
+    Returns:
+        Dictionary mapping module names to LoRA modules
+    """
+    lora_modules = {}
+    
+    for name, module in model.named_modules():
+        # Check for PEFT-style LoRA (has lora_A and lora_B)
+        if hasattr(module, 'lora_A') and hasattr(module, 'lora_B'):
+            lora_modules[name] = module
+    
+    return lora_modules
+
+
+def get_lora_param_names(model: nn.Module) -> List[str]:
+    """
+    Get names of all LoRA parameters in the model.
+    
+    Args:
+        model: PEFT model with LoRA
+    
+    Returns:
+        List of parameter names containing 'lora'
+    """
+    return [name for name, param in model.named_parameters() 
+            if 'lora' in name.lower() and param.requires_grad]
