@@ -188,6 +188,7 @@ class LaplaceLoRA:
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Generate predictive samples for calibration analysis.
+        Memory-efficient version that accumulates predictions incrementally.
         
         Args:
             data_loader: DataLoader for test data
@@ -200,22 +201,27 @@ class LaplaceLoRA:
         """
         self.model.eval()
         
-        # Storage for predictions
-        all_logits_list = []
+        # First pass: collect labels and allocate storage
         all_labels = []
+        n_batches = 0
+        batch_sizes = []
         
         with torch.no_grad():
-            # Get one batch to determine shape
-            first_batch = next(iter(data_loader))
-            if isinstance(first_batch, (tuple, list)):
-                n_test = len(data_loader.dataset)
-                n_classes = self.model.config.num_labels if hasattr(self.model, 'config') else 100
-            else:
-                n_test = len(data_loader.dataset)
-                n_classes = self.model.config.num_labels if hasattr(self.model, 'config') else 100
+            for batch in data_loader:
+                if isinstance(batch, (tuple, list)):
+                    targets = batch[1]
+                else:
+                    targets = batch['labels']
+                all_labels.append(targets)
+                batch_sizes.append(targets.size(0))
+                n_batches += 1
         
-        # Sample parameters
-        param_samples = self.sample_parameters(n_samples, layer_subset)
+        all_labels = torch.cat(all_labels, dim=0)
+        n_test = all_labels.size(0)
+        n_classes = self.model.config.num_labels if hasattr(self.model, 'config') else 100
+        
+        # Accumulator for average logits (running mean)
+        avg_logits = torch.zeros(n_test, n_classes)
         
         # Store original parameters
         original_params = {name: param.data.clone() 
@@ -223,38 +229,46 @@ class LaplaceLoRA:
                           if name in self.mean}
         
         # Generate predictions for each sample
-        for sample_idx, params in enumerate(tqdm(param_samples, desc="Generating predictive samples")):
+        for sample_idx in tqdm(range(n_samples), desc="Generating predictive samples"):
+            # Sample new parameters
+            sampled_params = self.sample_parameters(1, layer_subset)[0]
+            
             # Set sampled parameters
-            self.set_parameters(params)
+            self.set_parameters(sampled_params)
             
+            # Collect predictions for this sample
             sample_logits = []
-            sample_labels = []
             
-            for batch in data_loader:
-                if isinstance(batch, (tuple, list)):
-                    inputs, targets = batch[0].to(device), batch[1].to(device)
-                else:
-                    inputs = batch['pixel_values'].to(device)
-                    targets = batch['labels'].to(device)
-                
-                outputs = self.model(inputs)
-                if hasattr(outputs, 'logits'):
-                    logits = outputs.logits
-                else:
-                    logits = outputs
-                
-                sample_logits.append(logits.cpu())
-                if sample_idx == 0:  # Only store labels once
-                    sample_labels.append(targets.cpu())
+            with torch.no_grad():
+                for batch in data_loader:
+                    if isinstance(batch, (tuple, list)):
+                        inputs = batch[0].to(device)
+                    else:
+                        inputs = batch['pixel_values'].to(device)
+                    
+                    outputs = self.model(inputs)
+                    if hasattr(outputs, 'logits'):
+                        logits = outputs.logits
+                    else:
+                        logits = outputs
+                    
+                    sample_logits.append(logits.cpu())
+                    
+                    # Clear GPU cache after each batch
+                    del outputs, logits
+                    if device == 'cuda':
+                        torch.cuda.empty_cache()
             
-            all_logits_list.append(torch.cat(sample_logits, dim=0))
-            if sample_idx == 0:
-                all_labels = torch.cat(sample_labels, dim=0)
+            # Update running average
+            sample_logits = torch.cat(sample_logits, dim=0)
+            avg_logits = avg_logits + (sample_logits - avg_logits) / (sample_idx + 1)
+            
+            # Clear memory
+            del sample_logits, sampled_params
+            if device == 'cuda':
+                torch.cuda.empty_cache()
         
         # Restore original parameters
         self.set_parameters(original_params)
-        
-        # Average logits across samples (Bayesian model averaging)
-        avg_logits = torch.stack(all_logits_list, dim=0).mean(dim=0)
         
         return avg_logits, all_labels

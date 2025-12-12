@@ -2,6 +2,9 @@
 Evaluate layer-wise Bayesian posteriors and compute calibration metrics.
 Generates predictive samples for each layer subset and computes ECE.
 """
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+print("🎯 Configured to use GPU 6.")
 
 import torch
 from torch.utils.data import DataLoader
