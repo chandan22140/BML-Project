@@ -201,6 +201,81 @@ def test_predictive_sampling(model, laplace):
     return ece
 
 
+def test_kfac_laplace(model):
+    """Test KFAC Laplace approximation fitting."""
+    print("\n" + "="*60)
+    print("TEST 7: KFAC Laplace Approximation")
+    print("="*60)
+    
+    # Create small dataset
+    dataset = create_dummy_data(n_samples=50)
+    loader = DataLoader(dataset, batch_size=10, shuffle=False)
+    
+    # Initialize KFAC Laplace
+    laplace = LaplaceLoRA(
+        model=model,
+        prior_precision=1.0,
+        backend='kfac'
+    )
+    
+    print("  Fitting KFAC Laplace approximation...")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
+    laplace.fit(loader, device=device)
+    
+    print(f"✓ KFAC Laplace fitting successful")
+    print(f"  Backend: kfac")
+    print(f"  Parameters tracked: {len(laplace.mean)}")
+    print(f"  KFAC factors computed: {len(laplace.kfac_factors)}")
+    
+    # Test posterior stats
+    try:
+        stats = laplace.get_posterior_stats()
+        print(f"  Posterior stats: n_params={stats['n_parameters']}, n_layers={stats['n_layers']}")
+    except Exception as e:
+        print(f"  Warning: Could not get posterior stats: {e}")
+    
+    # Test sampling with KFAC
+    samples = laplace.sample_parameters(n_samples=3)
+    print(f"  KFAC sampling: {len(samples)} samples generated")
+    
+    assert laplace.mean is not None, "Mean not set after fitting"
+    assert laplace.precision is not None, "Precision not set after fitting"
+    
+    return laplace
+
+
+def test_laplace_save_load(model, laplace, tmp_path="/tmp/test_laplace.pt"):
+    """Test saving and loading Laplace approximation."""
+    print("\n" + "="*60)
+    print("TEST 8: Save/Load Laplace Approximation")
+    print("="*60)
+    
+    # Save
+    laplace.save(tmp_path)
+    print(f"  Saved to: {tmp_path}")
+    
+    # Create new Laplace and load
+    laplace_loaded = LaplaceLoRA(
+        model=model,
+        prior_precision=1.0,
+        backend=laplace.backend
+    )
+    laplace_loaded.load(tmp_path)
+    print(f"  Loaded from: {tmp_path}")
+    
+    # Verify
+    assert len(laplace_loaded.mean) == len(laplace.mean), "Mean mismatch after loading"
+    assert laplace_loaded.prior_precision == laplace.prior_precision, "Prior precision mismatch"
+    print(f"✓ Save/Load successful")
+    
+    # Cleanup
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    
+    return True
+
+
 def test_end_to_end():
     """Run complete end-to-end test."""
     print("\n" + "="*70)
@@ -219,7 +294,7 @@ def test_end_to_end():
         # Test 3: ECE computation
         test_ece_computation()
         
-        # Test 4: Laplace fitting
+        # Test 4: Laplace fitting (diagonal)
         laplace = test_laplace_fitting(model)
         
         # Test 5: Parameter sampling
@@ -227,6 +302,12 @@ def test_end_to_end():
         
         # Test 6: Predictive sampling
         test_predictive_sampling(model, laplace)
+        
+        # Test 7: KFAC Laplace
+        kfac_laplace = test_kfac_laplace(model)
+        
+        # Test 8: Save/Load
+        test_laplace_save_load(model, laplace)
         
         print("\n" + "="*70)
         print("✓ ALL TESTS PASSED!")
