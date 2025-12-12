@@ -2,6 +2,9 @@
 Evaluate layer-wise Bayesian posteriors and compute calibration metrics.
 Generates predictive samples for each layer subset and computes ECE.
 """
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+print("🎯 Configured to use GPU 6.")
 
 import torch
 from torch.utils.data import DataLoader
@@ -108,6 +111,14 @@ def main():
                         help='LoRA rank (must match training)')
     parser.add_argument('--lora_alpha', type=int, default=16,
                         help='LoRA alpha (must match training)')
+    parser.add_argument('--save_laplace', type=str, default=None,
+                        help='Path to save fitted Laplace approximation')
+    parser.add_argument('--load_laplace', type=str, default=None,
+                        help='Path to load pre-fitted Laplace approximation')
+    parser.add_argument('--use_glm', action='store_true',
+                        help='Use GLM predictive instead of MC sampling')
+    parser.add_argument('--optimize_prior', action='store_true',
+                        help='Optimize prior precision using marginal likelihood')
     
     args = parser.parse_args()
     
@@ -174,17 +185,44 @@ def main():
     print(f"Fitting {args.laplace_type} Laplace approximation...")
     print("="*60)
     
-    # For Laplace fitting, we need training data (use test as proxy for demo)
-    # In practice, use actual training set
-    train_loader = get_cifar100_test_loader(batch_size=args.batch_size)
-    
     laplace = LaplaceLoRA(
         model=model,
         likelihood='classification',
         prior_precision=args.prior_precision,
         backend=args.laplace_type
     )
-    laplace.fit(train_loader, device=device)
+    
+    if args.load_laplace and os.path.exists(args.load_laplace):
+        # Load pre-fitted Laplace approximation
+        print(f"Loading Laplace approximation from: {args.load_laplace}")
+        laplace.load(args.load_laplace)
+    else:
+        # For Laplace fitting, we need training data (use test as proxy for demo)
+        # In practice, use actual training set
+        train_loader = get_cifar100_test_loader(batch_size=args.batch_size)
+        laplace.fit(train_loader, device=device)
+        
+        # Optionally optimize prior precision
+        if args.optimize_prior:
+            print("\nOptimizing prior precision...")
+            laplace.optimize_prior_precision(train_loader, n_steps=50, verbose=True)
+        
+        # Optionally save the fitted Laplace approximation
+        if args.save_laplace:
+            laplace.save(args.save_laplace)
+    
+    # Print posterior statistics
+    try:
+        stats = laplace.get_posterior_stats()
+        print(f"\nPosterior statistics:")
+        print(f"  Backend: {stats['backend']}")
+        print(f"  Prior precision: {stats['prior_precision']:.4f}")
+        print(f"  Total LoRA parameters: {stats['n_parameters']:,}")
+        print(f"  Number of layers: {stats['n_layers']}")
+        if 'n_kfac_factors' in stats:
+            print(f"  KFAC factors computed: {stats['n_kfac_factors']}")
+    except Exception as e:
+        print(f"Could not get posterior stats: {e}")
     
     # Layer-wise evaluation
     print("\n" + "="*60)
